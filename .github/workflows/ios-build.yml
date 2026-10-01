@@ -1,0 +1,79 @@
+name: iOS Build (unsigned IPA)
+
+# 目的：在 macOS 云端把 phira（含 chart-core 移植层）构建成未签名 IPA，
+# 下载 artifact 后用 Sideloadly / SideStore / 爱思 签名侧载。
+#
+# ⚠️ chart-core 位于仓库内 `chart-core/`（phira workspace 的 path 依赖），
+#    Windows 上的开发工程 `规则引擎/ios/rust/` 通过相对 path 依赖它。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "chart-core/**"
+      - "phira/**"
+      - "prpr/**"
+      - "phira-main/**"
+      - "phira.xcodeproj/**"
+      - ".github/workflows/ios-build.yml"
+
+jobs:
+  build:
+    name: Build unsigned IPA (arm64)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (pinned toolchain)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-01
+          targets: aarch64-apple-ios
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            chart-core
+
+      - name: Rust — build phira-main for iOS
+        run: |
+          set -euo pipefail
+          cargo build --release --bin phira-main --target aarch64-apple-ios
+
+      - name: List available schemes (debug aid)
+        run: xcodebuild -project phira.xcodeproj -list
+
+      - name: Xcode — build unsigned .app (iphoneos)
+        run: |
+          set -euo pipefail
+          # 关闭签名：产物由本地 Sideloadly/SideStore 用开发者证书重签
+          xcodebuild \
+            -project phira.xcodeproj \
+            -scheme phira \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Pack unsigned IPA
+        run: |
+          set -euo pipefail
+          APP=$(find build/dd/Build/Products -maxdepth 2 -name "*.app" | head -1)
+          echo "APP=$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry phira-ios-unsigned.ipa Payload
+          ls -la phira-ios-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: phira-ios-unsigned
+          path: phira-ios-unsigned.ipa
+          retention-days: 14

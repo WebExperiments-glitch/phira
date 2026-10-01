@@ -1,0 +1,15 @@
+[package]
+name = "chart_core"
+version = "0.1.0"
+edition = "2021"
+description = "Phira/RPE 谱面解析与难度分析核心（从 Python 参考实现逐字移植，黄金夹具验收）"
+license = "GPL-3.0-only"
+
+# 依赖刻意压到最少：serde_json 是纯 Rust，Windows / iOS 都没有问题。
+# 不要为了"少一个依赖"手写 JSON 解析器 —— 那是另一类静默出错的来源。
+[dependencies]
+serde_json = "1"
+
+[lib]
+name = "chart_core"
+path = "src/lib.rs"
