@@ -3519,6 +3519,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rfd",
+ "rustls",
  "sanitize-filename",
  "sasa",
  "semver",

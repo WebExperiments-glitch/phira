@@ -65,8 +65,19 @@ reqwest = { workspace = true, default-features = false, features = [
     "charset",
     "http2",
     "system-proxy",
-    "rustls",
+    # ⚠️ 用 no-provider + 显式 ring，而不是默认的 "rustls"：
+    #    默认走 aws-lc-rs，其 iOS 交叉编译产物缺 ARM64 汇编符号
+    #    （_montgomery_s2n_bignum_mul_mont 等）→ 链接失败（CI 实测）。
+    #    ring 对 iOS 目标支持良好。
+    "rustls-no-provider",
     "query",
+] }
+# TLS 后端：ring（iOS 兼容）
+rustls = { version = "0.23.37", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+    "logging",
 ] }
 sanitize-filename = "0.6.0"
 semver = { version = "1.0.27", features = ["serde"] }
