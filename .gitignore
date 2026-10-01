@@ -42,7 +42,6 @@ inner.rs
 /phira/dist/
 
 # iOS / 构建产物
-/xcode
 /build
 *.log
 .DS_Store
