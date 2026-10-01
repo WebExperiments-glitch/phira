@@ -319,12 +319,17 @@ fn build_global_window_conf() -> Conf {
     conf
 }
 
-/// iOS 移植验证：启动时用**内置合成谱面**跑一遍 chart_core（解析 + 判定线分析），
-/// 结果打系统日志（Xcode console / 设备日志可见）。
+/// iOS 移植验证：启动时用**内置合成谱面**跑一遍 chart_core（解析 + 判定线分析）。
+/// 结果有两路输出：
+/// ① 系统日志（Xcode console / idevicesyslog 可见）
+/// ② 写入 App 数据目录 `data/chart_core_selftest.txt`
+///    —— 侧载的 IPA 看不到 Xcode 日志，用爱思助手「应用文件管理」打开
+///       phira 的 Documents/data/ 就能直接读到这个文件（这就是给用户的验收凭据）。
 /// ⚠️ 只在 iOS 编译（cfg 限定），不依赖任何外部文件，失败只记日志、绝不影响启动。
 #[cfg(target_os = "ios")]
 fn chart_core_selftest() {
     use std::fmt::Write as _;
+    let mut report = String::new();
     let mut rpe = String::from(
         r#"{"formatVersion":3,"META":{},"BPMList":[{"bpm":120.0,"startTime":[0,0,1]}],"judgeLineList":[{"Name":"selftest","father":-1,"eventLayers":[{"rotateEvents":[{"startTime":[0,0,1],"endTime":[4,0,1],"start":0.0,"end":90.0,"easingType":1}]}],"notes":["#,
     );
@@ -340,36 +345,70 @@ fn chart_core_selftest() {
     }
     rpe.push_str("]}]}");
     let path = std::env::temp_dir().join("chart_core_selftest.json");
+    let _ = writeln!(report, "chart-core iOS 自检  {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
     if let Err(err) = std::fs::write(&path, &rpe) {
         error!(?err, "[chart-core] selftest: 写入临时谱面失败");
-        return;
-    }
-    match chart_core::parse_chart_file(&path) {
-        Ok(p) => {
-            let n_real = p.notes.iter().filter(|n| n.is_fake == 0).count();
-            info!(
-                "[chart-core] selftest: 解析 ✅ 格式={} 实音符={}",
-                p.format, n_real
-            );
-            match chart_core::lines::analyze_lines(&path) {
-                Ok(ln) if ln.supported => {
-                    let first = &ln.lines[0];
-                    info!(
-                        "[chart-core] selftest: 判定线 {} 条 / 首线音符 {} / 旋转 {}~{}（期望含 -90，官方对 rotate 取负）",
-                        ln.total_lines,
-                        first["notes"],
-                        first["rot_min"],
-                        first["rot_max"]
-                    );
-                    info!("[chart-core] selftest: ✅ chart_core 在 iOS 上工作正常");
+        let _ = writeln!(report, "写入临时谱面失败: {err}");
+    } else {
+        match chart_core::parse_chart_file(&path) {
+            Ok(p) => {
+                let n_real = p.notes.iter().filter(|n| n.is_fake == 0).count();
+                info!(
+                    "[chart-core] selftest: 解析 ✅ 格式={} 实音符={}",
+                    p.format, n_real
+                );
+                let _ = writeln!(report, "① 解析 ✅ 格式={} 实音符={}", p.format, n_real);
+                match chart_core::lines::analyze_lines(&path) {
+                    Ok(ln) if ln.supported => {
+                        let first = &ln.lines[0];
+                        let rot_min = first["rot_min"].as_f64().unwrap_or(0.0);
+                        info!(
+                            "[chart-core] selftest: 判定线 {} 条 / 首线音符 {} / 旋转 {}~{}（期望含 -90，官方对 rotate 取负）",
+                            ln.total_lines,
+                            first["notes"],
+                            first["rot_min"],
+                            first["rot_max"]
+                        );
+                        let _ = writeln!(
+                            report,
+                            "② 判定线分析 ✅ 共 {} 条 / 首线音符 {} / 旋转 {}~{}",
+                            ln.total_lines,
+                            first["notes"],
+                            first["rot_min"],
+                            first["rot_max"]
+                        );
+                        // 硬验收：rotate 0→90 经官方取负后应出现 -90
+                        if rot_min <= -89.0 {
+                            let _ = writeln!(report, "③ 旋转取负验证 ✅（{} ≤ -89，官方语义正确）", rot_min);
+                            info!("[chart-core] selftest: ✅ chart_core 在 iOS 上工作正常");
+                        } else {
+                            let _ = writeln!(report, "③ 旋转取负验证 ❌（{} 未到 -90）", rot_min);
+                            error!("[chart-core] selftest: 旋转取负验证失败");
+                        }
+                    }
+                    Ok(_) => {
+                        error!("[chart-core] selftest: 判定线分析不支持该格式");
+                        let _ = writeln!(report, "② 判定线分析 ❌ 不支持该格式");
+                    }
+                    Err(err) => {
+                        error!(?err, "[chart-core] selftest: 判定线分析失败");
+                        let _ = writeln!(report, "② 判定线分析 ❌ {err}");
+                    }
                 }
-                Ok(_) => error!("[chart-core] selftest: 判定线分析不支持该格式"),
-                Err(err) => error!(?err, "[chart-core] selftest: 判定线分析失败"),
+            }
+            Err(err) => {
+                error!(?err, "[chart-core] selftest: 解析失败");
+                let _ = writeln!(report, "① 解析 ❌ {err}");
             }
         }
-        Err(err) => error!(?err, "[chart-core] selftest: 解析失败"),
     }
     let _ = std::fs::remove_file(&path);
+    // 结果落盘到 App 数据目录（爱思助手 → 应用文件 → phira → data/ 可见）
+    if let Err(err) = std::fs::write("data/chart_core_selftest.txt", &report) {
+        error!(?err, "[chart-core] selftest: 结果写盘失败");
+    } else {
+        info!("[chart-core] selftest: 报告已写入 data/chart_core_selftest.txt");
+    }
 }
 
 #[no_mangle]
